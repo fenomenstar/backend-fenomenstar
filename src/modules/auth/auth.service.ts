@@ -12,10 +12,9 @@ function hashToken(token: string): string {
 }
 
 export async function register(input: RegisterInput) {
-  // Check if email exists
   const existing = await query('SELECT id FROM users WHERE email = $1', [input.email]);
   if (existing.rows.length > 0) {
-    throw new ConflictError('Bu e-posta adresi zaten kullaniliyor');
+    throw new ConflictError('Bu e-posta adresi zaten kullanılıyor');
   }
 
   const passwordHash = await hashPassword(input.password);
@@ -30,13 +29,11 @@ export async function register(input: RegisterInput) {
 
   const user = result.rows[0];
 
-  // Generate tokens
-  const { token: accessToken, jti: accessJti } = generateAccessToken(user.id, user.role);
+  const { token: accessToken } = generateAccessToken(user.id, user.role);
   const { token: refreshToken } = generateRefreshToken(user.id);
 
-  // Store refresh token hash
   const refreshHash = hashToken(refreshToken);
-  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+  const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await query(
     'INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
     [user.id, refreshHash, expiresAt]
@@ -58,20 +55,18 @@ export async function login(input: LoginInput) {
   );
 
   if (result.rows.length === 0) {
-    throw new UnauthorizedError('Gecersiz e-posta veya sifre');
+    throw new UnauthorizedError('Geçersiz e-posta veya şifre');
   }
 
   const user = result.rows[0];
   const valid = await comparePassword(input.password, user.password_hash);
   if (!valid) {
-    throw new UnauthorizedError('Gecersiz e-posta veya sifre');
+    throw new UnauthorizedError('Geçersiz e-posta veya şifre');
   }
 
-  // Generate tokens
   const { token: accessToken } = generateAccessToken(user.id, user.role);
   const { token: refreshToken } = generateRefreshToken(user.id);
 
-  // Store refresh token
   const refreshHash = hashToken(refreshToken);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await query(
@@ -79,7 +74,6 @@ export async function login(input: LoginInput) {
     [user.id, refreshHash, expiresAt]
   );
 
-  // Remove password_hash from response
   const { password_hash: _, ...userWithoutPassword } = user;
 
   return {
@@ -90,15 +84,13 @@ export async function login(input: LoginInput) {
 }
 
 export async function refreshTokens(oldRefreshToken: string) {
-  // Verify the refresh token JWT
   let payload: { userId: string; jti: string };
   try {
     payload = verifyRefreshToken(oldRefreshToken);
   } catch {
-    throw new UnauthorizedError('Gecersiz veya suresi dolmus refresh token');
+    throw new UnauthorizedError('Geçersiz veya süresi dolmuş refresh token');
   }
 
-  // Check the stored refresh token
   const tokenHash = hashToken(oldRefreshToken);
   const stored = await query(
     'SELECT id, user_id FROM refresh_tokens WHERE token_hash = $1 AND revoked = false AND expires_at > NOW()',
@@ -106,13 +98,11 @@ export async function refreshTokens(oldRefreshToken: string) {
   );
 
   if (stored.rows.length === 0) {
-    throw new UnauthorizedError('Refresh token gecersiz veya iptal edilmis');
+    throw new UnauthorizedError('Refresh token geçersiz veya iptal edilmiş');
   }
 
-  // Revoke old refresh token (rotation)
   await query('UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1', [tokenHash]);
 
-  // Get user
   const userResult = await query(
     'SELECT id, name, email, role, avatar, city FROM users WHERE id = $1 AND is_active = true',
     [payload.userId]
@@ -124,11 +114,9 @@ export async function refreshTokens(oldRefreshToken: string) {
 
   const user = userResult.rows[0];
 
-  // Generate new token pair
   const { token: newAccessToken } = generateAccessToken(user.id, user.role);
   const { token: newRefreshToken } = generateRefreshToken(user.id);
 
-  // Store new refresh token
   const newHash = hashToken(newRefreshToken);
   const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   await query(
@@ -144,7 +132,6 @@ export async function refreshTokens(oldRefreshToken: string) {
 }
 
 export async function logout(accessToken: string, refreshToken?: string) {
-  // Blacklist the access token in Redis
   try {
     const expiry = getTokenExpiry(accessToken);
     if (expiry && expiry.jti && expiry.expiresIn > 0) {
@@ -155,7 +142,6 @@ export async function logout(accessToken: string, refreshToken?: string) {
     logger.error('Failed to blacklist access token:', err);
   }
 
-  // Revoke refresh token in database
   if (refreshToken) {
     const tokenHash = hashToken(refreshToken);
     await query('UPDATE refresh_tokens SET revoked = true WHERE token_hash = $1', [tokenHash]);
@@ -177,7 +163,6 @@ export async function getMe(userId: string) {
   return result.rows[0];
 }
 
-// Cleanup expired tokens (run periodically)
 export async function cleanupExpiredTokens() {
   await query('DELETE FROM refresh_tokens WHERE expires_at < NOW() OR revoked = true');
 }

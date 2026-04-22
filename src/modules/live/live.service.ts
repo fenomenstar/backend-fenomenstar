@@ -4,17 +4,19 @@ import { NotFoundError, BadRequestError } from '../../utils/errors';
 import { env } from '../../config/env';
 import { logger } from '../../utils/logger';
 
-export async function createStream(userId: string, data: {
-  title: string;
-  description?: string;
-  category?: string;
-  competition_id?: string;
-}) {
-  // Verify TURN server is configured before allowing stream creation
+export async function createStream(
+  userId: string,
+  data: {
+    title: string;
+    description?: string;
+    category?: string;
+    competition_id?: string;
+  }
+) {
   if (!isLiveStreamingAvailable()) {
     logger.error('TURN server not configured - live streaming disabled');
     throw new BadRequestError(
-      'Canlı yayın şu anda kullanılamaz. Sistem yapılandırması eksik.'
+      'Canli yayin su anda kullanilamaz. Sistem yapilandirmasi eksik.'
     );
   }
 
@@ -39,7 +41,7 @@ export async function endStream(streamId: string, userId: string) {
   );
 
   if (result.rows.length === 0) {
-    throw new NotFoundError('Canlı yayın bulunamadı');
+    throw new NotFoundError('Canli yayin bulunamadi');
   }
 
   return result.rows[0];
@@ -69,7 +71,7 @@ export async function getStreamById(streamId: string) {
   );
 
   if (result.rows.length === 0) {
-    throw new NotFoundError('Yayın bulunamadı');
+    throw new NotFoundError('Yayin bulunamadi');
   }
 
   return result.rows[0];
@@ -86,10 +88,6 @@ export async function likeStream(streamId: string) {
   await query('UPDATE live_streams SET likes = likes + 1 WHERE id = $1', [streamId]);
 }
 
-/**
- * Get TURN credentials - MANDATORY for production
- * Throws error if TURN is not configured
- */
 async function getCloudflareTurnCredentials(): Promise<{
   urls: string[];
   username: string;
@@ -97,7 +95,7 @@ async function getCloudflareTurnCredentials(): Promise<{
   ttl: number;
 }> {
   if (!env.CLOUDFLARE_TURN_KEY_ID || !env.CLOUDFLARE_TURN_API_TOKEN) {
-    throw new BadRequestError('Cloudflare TURN anahtarları eksik.');
+    throw new BadRequestError('Cloudflare TURN anahtarlari eksik.');
   }
 
   const ttl = 86400;
@@ -115,19 +113,25 @@ async function getCloudflareTurnCredentials(): Promise<{
 
   if (!response.ok) {
     const body = await response.text().catch(() => '');
-    throw new BadRequestError(`Cloudflare TURN bilgileri alınamadı (${response.status}). ${body}`.trim());
+    throw new BadRequestError(
+      `Cloudflare TURN bilgileri alinamadi (${response.status}). ${body}`.trim()
+    );
   }
 
-  const data = await response.json() as {
+  const data = (await response.json()) as {
     iceServers?: Array<{ urls: string[]; username?: string; credential?: string }>;
   };
 
-  const turnServer = data.iceServers?.find((server) => Array.isArray(server.urls) && !!server.username && !!server.credential);
+  const turnServer = data.iceServers?.find(
+    (server) => Array.isArray(server.urls) && !!server.username && !!server.credential
+  );
+
   if (!turnServer?.urls?.length || !turnServer.username || !turnServer.credential) {
-    throw new BadRequestError('Cloudflare TURN yanıtı geçersiz.');
+    throw new BadRequestError('Cloudflare TURN yaniti gecersiz.');
   }
 
   const urls = turnServer.urls.filter((url) => !url.includes(':53?transport='));
+
   return {
     urls,
     username: turnServer.username,
@@ -145,40 +149,38 @@ export async function getTurnCredentials(userId: string): Promise<{
   if (!isLiveStreamingAvailable()) {
     logger.error('TURN server not configured', { userId });
     throw new BadRequestError(
-      'WebRTC yapılandırması eksik. Canlı yayın kullanılamaz.'
+      'WebRTC yapilandirmasi eksik. Canli yayin kullanilamaz.'
     );
   }
 
   if (env.TURN_PROVIDER === 'cloudflare') {
     const credentials = await getCloudflareTurnCredentials();
-    logger.debug('Cloudflare TURN credentials generated', { userId, ttl: credentials.ttl, urlCount: credentials.urls.length });
+    logger.debug('Cloudflare TURN credentials generated', {
+      userId,
+      ttl: credentials.ttl,
+      urlCount: credentials.urls.length,
+    });
     return credentials;
   }
 
   const turnSecret = env.TURN_SECRET;
   const turnServer = env.TURN_SERVER;
+
   if (!turnSecret || !turnServer) {
-    throw new BadRequestError('TURN yapılandırması eksik.');
+    throw new BadRequestError('TURN yapilandirmasi eksik.');
   }
 
-  const ttl = 86400; // 24 hours
+  const ttl = 86400;
   const credentials = generateTurnCredentials(userId, turnSecret, ttl);
 
-  // Parse TURN server URL to create both UDP and TCP variants
   const turnUrls: string[] = [];
-  
-  // Add primary TURN server
   turnUrls.push(turnServer);
-  
-  // Add TCP variant if not already specified
+
   if (!turnServer.includes('?transport=')) {
     turnUrls.push(`${turnServer}?transport=tcp`);
   }
-  
-  // Add TURNS (TLS) variant
-  const turnsServer = turnServer
-    .replace('turn:', 'turns:')
-    .replace(':3478', ':5349');
+
+  const turnsServer = turnServer.replace('turn:', 'turns:').replace(':3478', ':5349');
   turnUrls.push(turnsServer);
 
   logger.debug('TURN credentials generated', { userId, ttl, urlCount: turnUrls.length });
@@ -191,12 +193,10 @@ export async function getTurnCredentials(userId: string): Promise<{
   };
 }
 
-/**
- * Check if live streaming is available (TURN configured)
- */
 export function isLiveStreamingAvailable(): boolean {
   if (env.TURN_PROVIDER === 'cloudflare') {
     return !!(env.CLOUDFLARE_TURN_KEY_ID && env.CLOUDFLARE_TURN_API_TOKEN);
   }
+
   return !!(env.TURN_SECRET && env.TURN_SERVER);
 }

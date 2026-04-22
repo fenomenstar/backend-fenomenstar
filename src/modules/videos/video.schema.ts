@@ -13,7 +13,7 @@ export const createVideoSchema = z.object({
   category: z.string()
     .min(1, 'Kategori gerekli')
     .max(50, 'Kategori en fazla 50 karakter olabilir'),
-  competition_id: z.string().uuid('Gecersiz yarisma ID').optional().nullable(),
+  competition_id: z.string().uuid('Geçersiz yarışma ID').optional().nullable(),
   // Client provides these but we validate on server after upload
   duration: z.number().int().min(0).max(VIDEO_LIMITS.MAX_DURATION).default(0),
   width: z.number().int().min(0).max(VIDEO_LIMITS.MAX_WIDTH).default(0),
@@ -38,9 +38,9 @@ export const uploadUrlSchema = z.object({
 });
 
 export const updateVideoAfterUploadSchema = z.object({
-  video_url: z.string().url('Gecersiz video URL'),
+  video_url: z.string().url('Geçersiz video URL'),
   video_key: z.string().min(1, 'Video key gerekli'),
-  thumbnail: z.string().url('Gecersiz thumbnail URL').optional().nullable(),
+  thumbnail: z.string().url('Geçersiz thumbnail URL').optional().nullable(),
   thumbnail_key: z.string().optional().nullable(),
   // If client provides estimated metadata, we validate it
   estimated_size: z.number().int().min(0).max(VIDEO_LIMITS.MAX_FILE_SIZE).optional(),

@@ -85,7 +85,7 @@ export function setupSignalingServer(server: Server) {
               };
               ws.send(JSON.stringify({ type: 'auth_success', userId: payload.userId }));
             } catch {
-              ws.send(JSON.stringify({ type: 'auth_error', message: 'Gecersiz token' }));
+              ws.send(JSON.stringify({ type: 'auth_error', message: 'Geçersiz token' }));
               ws.close();
             }
             break;

@@ -48,17 +48,14 @@ export async function refresh(req: Request, res: Response, next: NextFunction) {
 
 export async function logout(req: AuthRequest, res: Response, next: NextFunction) {
   try {
-    // Get access token from header
     const authHeader = req.headers.authorization;
     const accessToken = authHeader?.startsWith('Bearer ') ? authHeader.split(' ')[1] : undefined;
-    
-    // Get refresh token from body
     const { refreshToken } = req.body;
-    
+
     if (accessToken) {
       await authService.logout(accessToken, refreshToken);
     }
-    
+
     res.json({ message: 'Başarıyla çıkış yapıldı' });
   } catch (err) {
     next(err);

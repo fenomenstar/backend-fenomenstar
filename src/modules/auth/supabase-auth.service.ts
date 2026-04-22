@@ -46,7 +46,7 @@ export async function verifySupabaseTokenAndEnsureLocalUser(token: string): Prom
 
   const { data, error } = await supabaseAdmin.auth.getUser(token);
   if (error || !data.user) {
-    throw new UnauthorizedError('Gecersiz veya suresi dolmus token');
+    throw new UnauthorizedError('Geçersiz veya süresi dolmuş token');
   }
 
   const supaUser = data.user;
