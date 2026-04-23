@@ -45,6 +45,15 @@ export async function verifySupabaseTokenAndEnsureLocalUser(token: string): Prom
   }
 
   const { data, error } = await supabaseAdmin.auth.getUser(token);
+
+  // TEMP DEBUG - remove after diagnosing Supabase token verification
+  console.log('=== SUPABASE AUTH DEBUG ===');
+  console.log('token length:', token?.length);
+  console.log('token prefix:', token?.substring(0, 20));
+  console.log('error:', JSON.stringify(error));
+  console.log('user id:', data?.user?.id);
+  console.log('==========================');
+
   if (error || !data.user) {
     throw new UnauthorizedError('Geçersiz veya süresi dolmuş token');
   }
