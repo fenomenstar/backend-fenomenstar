@@ -29,6 +29,12 @@ export async function createStream(
     [id, userId, data.title, data.description || '', data.category || 'Genel', data.competition_id || null]
   );
 
+  logger.info('Live stream created', {
+    streamId: id,
+    userId,
+    category: data.category || 'Genel',
+  });
+
   return result.rows[0];
 }
 
@@ -44,6 +50,7 @@ export async function endStream(streamId: string, userId: string) {
     throw new NotFoundError('Canli yayin bulunamadi');
   }
 
+  logger.info('Live stream ended', { streamId, userId });
   return result.rows[0];
 }
 

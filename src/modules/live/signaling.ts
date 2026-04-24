@@ -1,9 +1,18 @@
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
 import { verifyAccessToken } from '../auth/jwt.service';
-import { updateViewerCount, likeStream } from './live.service';
+import {
+  isSupabaseAuthEnabled,
+  verifySupabaseTokenAndEnsureLocalUser,
+} from '../auth/supabase-auth.service';
+import {
+  updateViewerCount,
+  likeStream,
+  endStream as markStreamEnded,
+} from './live.service';
 import { logger } from '../../utils/logger';
 import { moderateTextContent } from '../../services/moderation.service';
+import { AuthPayload } from '../../types';
 
 interface SignalingClient {
   ws: WebSocket;
@@ -62,6 +71,14 @@ function broadcastToRoom(streamId: string, message: object, excludeUserId?: stri
   });
 }
 
+async function resolveSignalingAuth(token: string): Promise<AuthPayload> {
+  if (isSupabaseAuthEnabled()) {
+    return verifySupabaseTokenAndEnsureLocalUser(token);
+  }
+
+  return verifyAccessToken(token);
+}
+
 export function setupSignalingServer(server: Server) {
   const wss = new WebSocketServer({ server, path: '/ws' });
 
@@ -76,7 +93,8 @@ export function setupSignalingServer(server: Server) {
           // ===== AUTH =====
           case 'auth': {
             try {
-              const payload = verifyAccessToken(message.token);
+              const payload = await resolveSignalingAuth(message.token);
+              logger.info('Signaling auth success', { userId: payload.userId });
               client = {
                 ws,
                 userId: payload.userId,
@@ -84,7 +102,8 @@ export function setupSignalingServer(server: Server) {
                 role: 'viewer',
               };
               ws.send(JSON.stringify({ type: 'auth_success', userId: payload.userId }));
-            } catch {
+            } catch (error) {
+              logger.warn('Signaling auth failed', { error });
               ws.send(JSON.stringify({ type: 'auth_error', message: 'Geçersiz token' }));
               ws.close();
             }
@@ -104,7 +123,7 @@ export function setupSignalingServer(server: Server) {
             if (isBroadcaster) {
               client.role = 'broadcaster';
               room.broadcaster = client;
-              logger.info(`Broadcaster ${client.userId} joined stream ${streamId}`);
+              logger.info('Broadcaster joined stream', { userId: client.userId, streamId });
             } else {
               client.role = 'viewer';
               room.viewers.set(client.userId, client);
@@ -120,7 +139,11 @@ export function setupSignalingServer(server: Server) {
                 }));
               }
 
-              logger.info(`Viewer ${client.userId} joined stream ${streamId}, total: ${room.viewers.size}`);
+              logger.info('Viewer joined stream', {
+                userId: client.userId,
+                streamId,
+                viewerCount: room.viewers.size,
+              });
             }
 
             // Send current viewer count
@@ -250,9 +273,40 @@ export function setupSignalingServer(server: Server) {
           case 'end_stream': {
             if (!client?.streamId) return;
 
+            logger.info('End stream requested', {
+              streamId: client.streamId,
+              userId: client.userId,
+              role: client.role,
+            });
+
+            if (client.role === 'broadcaster') {
+              try {
+                await markStreamEnded(client.streamId, client.userId);
+              } catch (error) {
+                logger.error('Failed to mark stream as ended from signaling', {
+                  streamId: client.streamId,
+                  userId: client.userId,
+                  error,
+                });
+              }
+            }
+
+            const room = rooms.get(client.streamId);
             broadcastToRoom(client.streamId, {
               type: 'stream_ended',
               streamId: client.streamId,
+            });
+
+            room?.viewers.forEach((viewer) => {
+              try {
+                viewer.ws.close();
+              } catch (error) {
+                logger.warn('Failed to close viewer socket after stream end', {
+                  streamId: client?.streamId,
+                  userId: viewer.userId,
+                  error,
+                });
+              }
             });
 
             rooms.delete(client.streamId);
@@ -281,7 +335,10 @@ export function setupSignalingServer(server: Server) {
           streamId: client.streamId,
         }, client.userId);
         rooms.delete(client.streamId);
-        logger.info(`Broadcaster ${client.userId} left stream ${client.streamId}`);
+        logger.info('Broadcaster disconnected', {
+          userId: client.userId,
+          streamId: client.streamId,
+        });
       } else {
         // Viewer left
         room.viewers.delete(client.userId);
@@ -294,7 +351,11 @@ export function setupSignalingServer(server: Server) {
             viewerCount: room.viewers.size,
           }));
         }
-        logger.info(`Viewer ${client.userId} left stream ${client.streamId}, remaining: ${room.viewers.size}`);
+        logger.info('Viewer disconnected', {
+          userId: client.userId,
+          streamId: client.streamId,
+          viewerCount: room.viewers.size,
+        });
       }
     });
 
