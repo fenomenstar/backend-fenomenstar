@@ -1,14 +1,26 @@
-import { query } from '../../config/database';
+import { getClient, query } from '../../config/database';
 import { BadRequestError, NotFoundError } from '../../utils/errors';
 import { createNotification } from '../../services/notifications.service';
 import { generateTextEmbedding, formatVectorLiteral } from '../../services/embeddings.service';
 
 export async function getUserById(userId: string, viewerId?: string | null) {
   const result = await query(
-    `SELECT id, name, email, role, avatar, city, age, bio, talents, badges,
-            followers, total_votes, total_views, package, created_at
-     FROM users WHERE id = $1 AND is_active = true`,
-    [userId]
+    `SELECT u.id, u.name, u.email, u.role, u.avatar, u.city, u.age, u.bio, u.talents, u.badges,
+            COALESCE(f.followers_count, 0)::int AS followers,
+            u.total_votes, u.total_views, u.package, u.created_at,
+            EXISTS(
+              SELECT 1
+              FROM follows viewer_follow
+              WHERE viewer_follow.follower_id = $2 AND viewer_follow.following_id = u.id
+            ) AS is_following
+     FROM users u
+     LEFT JOIN (
+       SELECT following_id, COUNT(*)::int AS followers_count
+       FROM follows
+       GROUP BY following_id
+     ) f ON f.following_id = u.id
+     WHERE u.id = $1 AND u.is_active = true`,
+    [userId, viewerId]
   );
 
   if (result.rows.length === 0) {
@@ -30,6 +42,27 @@ export async function getUserById(userId: string, viewerId?: string | null) {
     ...result.rows[0],
     blocked_relationship: isBlocked.rows.length > 0,
   };
+}
+
+async function syncFollowerCount(
+  client: { query: (text: string, params?: unknown[]) => Promise<{ rows: Array<Record<string, unknown>> }> },
+  userId: string
+) {
+  const result = await client.query(
+    `WITH follower_total AS (
+       SELECT COUNT(*)::int AS followers
+       FROM follows
+       WHERE following_id = $1
+     )
+     UPDATE users
+     SET followers = follower_total.followers
+     FROM follower_total
+     WHERE id = $1
+     RETURNING users.followers`,
+    [userId]
+  );
+
+  return (result.rows[0]?.followers as number | undefined) ?? 0;
 }
 
 export async function updateUser(userId: string, data: {
@@ -99,30 +132,43 @@ export async function followUser(followerId: string, followingId: string) {
     throw new BadRequestError('Bu kullanici ile etkilesim sinirlandirildi');
   }
 
-  const existing = await query(
-    'SELECT id FROM follows WHERE follower_id = $1 AND following_id = $2',
-    [followerId, followingId]
-  );
+  const client = await getClient();
 
-  if (existing.rows.length > 0) {
-    await query('DELETE FROM follows WHERE follower_id = $1 AND following_id = $2', [followerId, followingId]);
-    await query('UPDATE users SET followers = followers - 1 WHERE id = $1', [followingId]);
-    return { following: false };
+  try {
+    await client.query('BEGIN');
+
+    const existing = await client.query(
+      'SELECT id FROM follows WHERE follower_id = $1 AND following_id = $2',
+      [followerId, followingId]
+    );
+
+    if (existing.rows.length > 0) {
+      await client.query('DELETE FROM follows WHERE follower_id = $1 AND following_id = $2', [followerId, followingId]);
+      const followers = await syncFollowerCount(client, followingId);
+      await client.query('COMMIT');
+      return { following: false, followers };
+    }
+
+    await client.query('INSERT INTO follows (follower_id, following_id) VALUES ($1, $2)', [followerId, followingId]);
+    const followers = await syncFollowerCount(client, followingId);
+    await client.query('COMMIT');
+
+    const actor = await query('SELECT name FROM users WHERE id = $1', [followerId]);
+    await createNotification({
+      userId: followingId,
+      actorId: followerId,
+      type: 'follow',
+      title: 'Yeni takipci',
+      body: `${actor.rows[0]?.name || 'Bir kullanici'} seni takip etmeye basladi.`,
+    }).catch(() => {});
+
+    return { following: true, followers };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-
-  await query('INSERT INTO follows (follower_id, following_id) VALUES ($1, $2)', [followerId, followingId]);
-  await query('UPDATE users SET followers = followers + 1 WHERE id = $1', [followingId]);
-
-  const actor = await query('SELECT name FROM users WHERE id = $1', [followerId]);
-  await createNotification({
-    userId: followingId,
-    actorId: followerId,
-    type: 'follow',
-    title: 'Yeni takipci',
-    body: `${actor.rows[0]?.name || 'Bir kullanici'} seni takip etmeye basladi.`,
-  }).catch(() => {});
-
-  return { following: true };
 }
 
 export async function getLeaderboard(period: string = 'all', limit: number = 50) {
@@ -206,10 +252,23 @@ export async function blockUser(blockerId: string, blockedId: string) {
     [blockerId, blockedId]
   );
 
-  await query(
-    'DELETE FROM follows WHERE (follower_id = $1 AND following_id = $2) OR (follower_id = $2 AND following_id = $1)',
-    [blockerId, blockedId]
-  );
+  const client = await getClient();
+
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      'DELETE FROM follows WHERE (follower_id = $1 AND following_id = $2) OR (follower_id = $2 AND following_id = $1)',
+      [blockerId, blockedId]
+    );
+    await syncFollowerCount(client, blockerId);
+    await syncFollowerCount(client, blockedId);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 
   return { blocked: true };
 }
